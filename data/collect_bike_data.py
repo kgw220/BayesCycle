@@ -73,7 +73,6 @@ def aggregate_zipped_csvs(directory_path: str) -> pd.DataFrame:
 
     # Final progress indicator
     print("Concatenation complete!")
-    print(f"The final combined DataFrame has a shape of: {final_dataframe.shape}")
 
     return final_dataframe
 
@@ -81,4 +80,17 @@ def aggregate_zipped_csvs(directory_path: str) -> pd.DataFrame:
 if __name__ == "__main__":
     my_directory_path = "./raw_data"
     df_bike = aggregate_zipped_csvs(my_directory_path)
+    # Drop unnecessary columns, will be re-added later
+    df_bike = df_bike.drop(
+        columns=[
+            "Station_ID",
+            "Station_Name",
+            "Day of Go_live_date",
+            "Status",
+            "start_station_id",
+            "end_station_id",
+        ],
+        axis=1,
+    )
+    print(f"The final combined DataFrame has a shape of: {df_bike.shape}")
     df_bike.to_pickle("indego_bike_data.pkl")
