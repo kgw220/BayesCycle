@@ -1,0 +1,11 @@
+arviz==0.22.0
+branca==0.8.1
+matplotlib==3.10.3
+numpy==2.2.6
+pandas==2.3.1
+plotly==6.2.0
+pymc==5.25.1
+pysal==25.1
+pytensor==2.31.7
+streamlit==1.47.0
+streamlit_folium==0.25.0
