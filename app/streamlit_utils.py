@@ -27,7 +27,7 @@ def load_model_data(model_name: str) -> az.InferenceData:
         The loaded InferenceData object containing the model results.
     """
     try:
-        model_path = f"../models/{model_name}.nc"
+        model_path = f"/models/{model_name}.nc"
         idata = az.from_netcdf(model_path)
         return idata
     except FileNotFoundError:
