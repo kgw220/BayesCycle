@@ -8,6 +8,12 @@ import streamlit as st
 
 from streamlit_utils import load_model_data, create_duration_tab
 
+# TEST
+import os
+
+print("CWD:", os.getcwd())
+print("Repo root contents:", os.listdir(".."))
+print("Models dir contents:", os.listdir("../models"))
 
 # Apply custom CSS; Minimal padding & blue highlights for tabs and slider objects
 st.markdown(
