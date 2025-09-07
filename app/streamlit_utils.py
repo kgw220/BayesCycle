@@ -29,7 +29,6 @@ def load_model_data(model_name: str) -> az.InferenceData:
         The loaded InferenceData object containing the model results.
     """
     try:
-        # model_path = f"/models/{model_name}.nc"
         script_dir = os.path.dirname(__file__)
         project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
         model_path = os.path.join(project_root, "models", f"{model_name}.nc")
