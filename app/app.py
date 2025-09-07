@@ -14,7 +14,7 @@ import os
 print("CWD:", os.getcwd())
 print("App __file__:", __file__)
 print("Files in repo root:", os.listdir(os.getcwd()))
-print("Files in models dir:", os.listdir(os.path.join(os.getcwd(), "bayescycle", "models")))
+print("Files in models dir:", os.listdir(os.path.join(os.getcwd(), "models")))
 
 # Apply custom CSS; Minimal padding & blue highlights for tabs and slider objects
 st.markdown(
