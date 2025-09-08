@@ -6,9 +6,9 @@ utility functions from streamlit_utils.py.
 import pandas as pd
 import streamlit as st
 
-from streamlit_utils import load_model_data, create_duration_tab
+import streamlit_utils as su
 
-# Apply custom CSS; Minimal padding & blue highlights for tabs and slider objects
+# Apply custom CSS; Minimal padding
 st.markdown(
     """
     <style>
@@ -23,11 +23,13 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Load model .nc files
-idata_duration = load_model_data("duration_model_results")
+st.set_page_config(page_title="Indego Bike Demand Dashboard", layout="wide")
 
-# --- Main App Logic ---
-st.title("Indego Bike Demand Dashboard")
+# Load model .nc files
+idata_duration = su.load_model_data("duration_model_results")
+idata_station = su.load_model_data("station_pop_model_results")
+# Load auxiliary data files
+aux_data = su.load_auxiliary_data()
 
 # Create tabs for different models
 tab1, tab2, tab3, tab4 = st.tabs(
@@ -35,16 +37,42 @@ tab1, tab2, tab3, tab4 = st.tabs(
 )
 
 with tab1:
-    st.header("Ride Duration Probability Analysis")
     st.write(
         "Use the slider to select a bike ride duration range (in minutes) and find the probability \
         of a ride duration falling within it."
     )
 
+    # User input for ride duration range
     min_duration_val, max_duration_val = st.slider(
         "Select a ride duration range (minutes):", min_value=0, max_value=180, value=(10, 30)
     )
 
     if idata_duration:
-        # Pass the slider values to the function
-        create_duration_tab(idata_duration, min_duration_val, max_duration_val)
+        su.create_duration_tab(idata_duration, min_duration_val, max_duration_val)
+
+with tab2:
+    st.write(
+        "Select a day of the week to see the predicted average number of trips starting from each \
+        station."
+    )
+    # User input for day of the week and map style
+    day_selection = st.selectbox(
+        "Choose a day of the week:", ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    )
+    map_style = st.selectbox(
+        "Choose a map style:", ("Light", "Street Map", "Satellite"), key="map_style_select"
+    )
+    tile_map = {
+        "Light": "CartoDB positron",
+        "Street Map": "OpenStreetMap",
+        "Satellite": "Esri.WorldImagery",
+    }
+
+    if idata_station and aux_data:
+        su.create_station_popularity_tab(
+            idata_station,
+            aux_data["stations_df"],
+            aux_data["station_ids"],
+            day_selection,
+            tile_map[map_style],
+        )

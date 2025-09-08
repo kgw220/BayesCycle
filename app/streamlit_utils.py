@@ -5,12 +5,17 @@ This module includes relevant utility functions for my Indego Bike Demand stream
 import os
 
 import arviz as az
+import branca.colormap as bcm
+import folium
 import numpy as np
+import pandas as pd
+import pickle
 import plotly.graph_objects as go
 import streamlit as st
 
 from scipy.stats import lognorm
-from typing import Optional, Tuple
+from streamlit_folium import st_folium
+from typing import Dict, List, Optional, Tuple
 
 
 @st.cache_data
@@ -39,6 +44,36 @@ def load_model_data(model_name: str) -> az.InferenceData:
         return None
 
 
+@st.cache_data
+def load_auxiliary_data() -> Optional[Dict]:
+    """
+    Loads auxiliary data files needed for the app, including the unique
+    station details and the list of station IDs used during model training.
+
+    Returns
+    -------
+    dict or None
+        A dictionary containing the stations DataFrame and the list of station IDs,
+        or None if any files are not found.
+    """
+    try:
+        script_dir = os.path.dirname(__file__)
+        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+
+        # Load the DataFrame of unique station details
+        stations_df_path = os.path.join(project_root, "data", "df_stations_unique.pkl")
+        stations_df = pd.read_pickle(stations_df_path)
+
+        # Load the pickled list of station IDs that the hierarchical model was trained on
+        station_ids_path = os.path.join(project_root, "data", "station_id_list.pkl")
+        with open(station_ids_path, "rb") as f:
+            station_ids = pickle.load(f)
+        return {"stations_df": stations_df, "station_ids": station_ids}
+    except FileNotFoundError as e:
+        st.error(f"Auxiliary data file not found: {e}. Please ensure all data files are in place.")
+        return None
+
+
 def create_duration_tab(idata: az.InferenceData, min_duration: int, max_duration: int) -> None:
     """
     Creates the Streamlit tab for analyzing and visualizing ride durations.
@@ -62,7 +97,7 @@ def create_duration_tab(idata: az.InferenceData, min_duration: int, max_duration
     prob_in_range = lognorm.cdf(max_duration, s=sigma_fit, scale=np.exp(mu_fit)) - lognorm.cdf(
         min_duration, s=sigma_fit, scale=np.exp(mu_fit)
     )
-
+    # Display the probability as a metric
     st.metric(
         label=f"Probability of ride being between {min_duration} and {max_duration} mins",
         value=f"{prob_in_range:.2%}",
@@ -111,3 +146,116 @@ def create_duration_tab(idata: az.InferenceData, min_duration: int, max_duration
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+
+def create_station_popularity_tab(
+    idata: az.InferenceData,
+    stations_df: pd.DataFrame,
+    station_ids: List[int],
+    day_of_week: str,
+    tile_layer: str,
+) -> None:
+    """
+    Creates the Streamlit tab for visualizing station popularity on a map.
+
+    Parameters:
+    -----------
+    idata : az.InferenceData
+        The fitted InferenceData object for the station popularity model
+    stations_df : pd.DataFrame
+        DataFrame containing details for all unique stations (ID, name, lat, lon)
+    station_ids : List[int]
+        The ordered list of station IDs that the hierarchical model was trained on
+    day_of_week : str
+        The selected day of the week to display (e.g., "Mon")
+    tile_layer : str
+        The name of the Folium tile layer to use for the map's base layer
+    """
+    # --- Recreate the Prediction DataFrame ---
+    # Extract the posterior mean for each of the model's parameters
+    posterior_samples = az.extract(idata)
+    station_pop_est = posterior_samples["station_log_popularity"].mean(dim="sample").values
+    day_effect_est = posterior_samples["day_effect"].mean(dim="sample").values
+    # Model was trained on ~97.7 weeks of data
+    n_weeks = 97.7
+    days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    # Create an empty DataFrame to hold the daily predictions for each station
+    prediction_df = pd.DataFrame(index=station_ids, columns=days)
+    prediction_df.index.name = "Station_ID"
+
+    # Loop through each station and day to calculate the predicted demand
+    for station_idx, station_id in enumerate(station_ids):
+        for day_idx, day_name in enumerate(days):
+            # Combine the station's unique popularity with the shared day effect
+            log_expected_total_count = station_pop_est[station_idx] + day_effect_est[day_idx]
+            expected_total_count = np.exp(log_expected_total_count)
+
+            # Normalize the total count by the number of weeks to get the average daily demand
+            avg_daily_demand = expected_total_count / n_weeks
+            prediction_df.loc[station_id, day_name] = avg_daily_demand
+
+    # Merge the prediction data with the station details (name, lat, lon)
+    prediction_df = pd.merge(prediction_df, stations_df, left_index=True, right_on="Station_ID")
+
+    # Drop rows with missing coordinates before plotting
+    prediction_df.dropna(subset=["latitude", "longitude"], inplace=True)
+
+    # --- Create the Folium Map ---
+    # Center the map on the average coordinates of all stations
+    map_center = [prediction_df["latitude"].mean(), prediction_df["longitude"].mean()]
+    m = folium.Map(location=map_center, zoom_start=12, tiles=tile_layer)
+
+    # Set up a continuous colormap for the markers based on demand for the selected day
+    min_demand = prediction_df[day_of_week].min()
+    max_demand = prediction_df[day_of_week].max()
+    colormap = bcm.LinearColormap(
+        ["yellow", "orange", "red"],
+        vmin=min_demand,
+        vmax=max_demand,
+        caption=f"Avg. Daily Trips for {day_of_week}",
+    )
+
+    # Add a colored CircleMarker to the map for each station
+    for _, row in prediction_df.iterrows():
+        folium.CircleMarker(
+            location=[row["latitude"], row["longitude"]],
+            radius=5,
+            color=colormap(row[day_of_week]),
+            fill=True,
+            fill_color=colormap(row[day_of_week]),
+            fill_opacity=0.7,
+            # The tooltip shows the station name and its exact predicted trips
+            tooltip=f"<b>{row['Station_Name']}</b><br>Predicted Trips: {row[day_of_week]:.1f}",
+        ).add_to(m)
+
+    # Add the colormap legend to the map
+    m.add_child(colormap)
+
+    # Add custom CSS to style the legend and colormap for better visibility
+    style_block = """
+    <style>
+        div.branca-colormap,
+        div.branca-colorbar,
+        div.legend {
+            background-color: rgba(255, 255, 255, 0.85) !important;  /* white, transparent */
+            border: 2px solid #666 !important;
+            border-radius: 8px !important;
+            padding: 6px 10px !important;
+            color: #000 !important;
+            font-weight: 600 !important;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.25) !important;
+        }
+
+        div.branca-colormap .caption,
+        div.branca-colorbar .caption,
+        div.legend .caption {
+            display: block;
+            text-align: center;
+            margin-bottom: 4px;
+        }
+    </style>
+    """
+    m.get_root().header.add_child(folium.Element(style_block))
+
+    st_folium(m, use_container_width=True, height=600, returned_objects=[])
