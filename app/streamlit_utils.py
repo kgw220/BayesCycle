@@ -359,6 +359,7 @@ def create_forecast_tab(
         xaxis=dict(
             dtick="M1",
             tickformat="%Y-%b",
+            tickangle=-45,
         ),
     )
     st.plotly_chart(fig_fit, use_container_width=True)
@@ -437,7 +438,11 @@ def create_forecast_tab(
         title="Daily Bike Ride Demand Forecast",
         xaxis_title="Date",
         yaxis_title="Number of Rides",
-        xaxis=dict(dtick="M1", tickformat="%Y-%b"),
+        xaxis=dict(
+            dtick="M1",
+            tickformat="%Y-%b",
+            tickangle=-45,
+        ),
     )
     st.plotly_chart(fig_fc, use_container_width=True)
 
