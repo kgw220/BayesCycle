@@ -353,6 +353,8 @@ def create_forecast_tab(
     st.subheader("90-Day Forecast since June 2025")
 
     # Manually simulate the forecast
+    progress_bar = st.progress(0, text="Simulating future ride paths...")
+
     last_day_trend = posterior_samples["trend"].isel(trend_dim_0=-1)
     week_effect_samples = posterior_samples["week_effect"]
     alpha_samples = posterior_samples["alpha"]
@@ -383,6 +385,10 @@ def create_forecast_tab(
             p = expected_count / (expected_count + current_alpha_sample)
             # Sample the final count using the Negative Binomial distribution
             forecast_values[i, t] = nbinom.rvs(n=current_alpha_sample, p=1 - p)
+
+        progress_bar.progress((i + 1) / n_samples, text=f"Simulating path {i+1}/{n_samples}")
+
+    progress_bar.empty()
 
     # Apply gaussian smoothing if specified
     mean_forecast = forecast_values.mean(axis=0)

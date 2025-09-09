@@ -86,7 +86,7 @@ with tab3:
         "Select Gaussian smoothing sigma:",
         min_value=0,
         max_value=10,
-        value=5,
+        value=0,
         step=1,
         help="Controls the amount of smoothing applied to the trend and forecast lines in the \
              'Daily Forecast' tab. 0 means no smoothing.",
