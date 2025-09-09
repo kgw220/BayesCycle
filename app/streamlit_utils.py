@@ -12,11 +12,14 @@ import pandas as pd
 import pickle
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
+from folium.plugins import AntPath
 from scipy.ndimage import gaussian_filter
 from scipy.stats import nbinom, lognorm
+from sklearn.metrics.pairwise import haversine_distances
 from streamlit_folium import st_folium
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @st.cache_data
@@ -73,10 +76,20 @@ def load_auxiliary_data() -> Optional[Dict]:
         with open(station_ids_path, "rb") as f:
             station_ids = pickle.load(f)
 
+        # Load the OD matrix, used to support the geospatial gravity model
+        od_matrix_path = os.path.join(script_dir, "..", "data", "od_matrix.pkl")
+        od_matrix = pd.read_pickle(od_matrix_path)
+
+        # Load the list of station IDs used in the hierarchical model
+        df_distances_path = os.path.join(script_dir, "..", "data", "station_distances.pkl")
+        df_distances = pd.read_pickle(df_distances_path)
+
         return {
             "stations_df": df_stations,
             "station_ids": station_ids,
             "daily_rides": df_daily_rides,
+            "od_matrix": od_matrix,
+            "distances": df_distances,
         }
     except FileNotFoundError as e:
         st.error(f"Auxiliary data file not found: {e}. Please ensure all data files are in place.")
@@ -247,7 +260,7 @@ def create_station_popularity_tab(
         div.branca-colormap,
         div.branca-colorbar,
         div.legend {
-            background-color: rgba(255, 255, 255, 0.85) !important;  /* white, transparent */
+            background-color: rgba(255, 255, 255, 0.85) !important;  
             border: 2px solid #666 !important;
             border-radius: 8px !important;
             padding: 6px 10px !important;
@@ -427,3 +440,189 @@ def create_forecast_tab(
         xaxis=dict(dtick="M1", tickformat="%Y-%b"),
     )
     st.plotly_chart(fig_fc, use_container_width=True)
+
+
+def create_trip_flow_tab(
+    gravity_idata: az.InferenceData,
+    station_idata: az.InferenceData,
+    aux_data: Dict[str, Any],
+    tile_layer: str,
+) -> None:
+    """
+    Creates the Streamlit tab for visualizing the trip flow (gravity) model.
+
+    Parameters:
+    -----------
+    gravity_idata : az.InferenceData
+        Fitted InferenceData for the gravity model
+    station_idata : az.InferenceData
+        Fitted InferenceData for the station popularity model
+    aux_data : Dict[str, Any]
+        A dictionary containing auxiliary data like stations_df, od_matrix, etc
+    tile_layer : str
+        The name of the Folium tile layer to use for the map's base layer
+    """
+    st.write(
+        "Select an origin station and one or more destination stations to visualize the predicted \
+        average daily trip flows between them."
+    )
+
+    # Recreate the model_df
+    stations_df, station_ids = aux_data["stations_df"], aux_data["station_ids"]
+    od_matrix, df_distances = aux_data["od_matrix"], aux_data["distances"]
+
+    # Filter out stations that do not appear as starting or ending stations in the OD matrix
+    od_matrix = od_matrix.loc[station_ids, station_ids]
+    df_distances = df_distances[
+        df_distances["origin_id"].isin(station_ids)
+        & df_distances["destination_id"].isin(station_ids)
+    ]
+
+    # Create a lookup dictionary that maps each station ID to its internal model index (0, 1, 2...)
+    station_lookup = {id: i for i, id in enumerate(station_ids)}
+
+    # Extract the posterior samples from the fitted hierarchical model
+    posterior_station = az.extract(station_idata)
+    station_pop_est = posterior_station["station_log_popularity"].mean(dim="sample").values
+    # Convert the log popularity scores to the original scale and store them in a Series, indexed
+    # by the model index
+    station_popularity = pd.Series(np.exp(station_pop_est), index=range(len(station_ids)))
+    # Create the final mapping from the real station ID to its estimated popularity score
+    station_id_to_pop_map = {
+        st_id: station_popularity[idx] for st_id, idx in station_lookup.items()
+    }
+
+    # Convert the OD matrix to a long format DataFrame for easier merging. Then, merge popularity
+    # scores and distance data for each OD pair
+    model_df = od_matrix.unstack().reset_index(name="trip_count")
+    model_df.columns = ["origin_id", "destination_id", "trip_count"]
+    model_df["origin_pop"] = model_df["origin_id"].map(station_id_to_pop_map)
+    model_df["dest_pop"] = model_df["destination_id"].map(station_id_to_pop_map)
+    model_df = model_df.merge(df_distances, on=["origin_id", "destination_id"])
+    model_df = model_df.query(
+        "origin_pop > 0 and dest_pop > 0 and distance_km > 0 and origin_id != destination_id"
+    ).fillna(0)
+
+    # Extra coefficients from the gravity model to calculate predicted trips
+    coeffs = az.summary(
+        gravity_idata, var_names=["alpha", "beta_origin", "beta_dest", "gamma_dist"]
+    )["mean"]
+    model_df["predicted_log_trips"] = (
+        coeffs["alpha"]
+        + coeffs["beta_origin"] * np.log(model_df["origin_pop"])
+        + coeffs["beta_dest"] * np.log(model_df["dest_pop"])
+        - coeffs["gamma_dist"] * np.log(model_df["distance_km"])
+    )
+    model_df["predicted_trips"] = np.exp(model_df["predicted_log_trips"])
+    model_df["avg_daily_trips"] = model_df["predicted_trips"] / 730
+
+    # User input for origin and destination stations
+    station_names = sorted(stations_df["Station_Name"].unique())
+    origin_name = st.selectbox("Choose an origin station:", station_names)
+    available_destinations = sorted(
+        model_df[
+            model_df["origin_id"]
+            == stations_df[stations_df["Station_Name"] == origin_name]["Station_ID"].iloc[0]
+        ]["destination_id"]
+        .map(stations_df.set_index("Station_ID")["Station_Name"])
+        .unique()
+    )
+    selected_destinations = st.multiselect(
+        "Choose destination stations to highlight:", available_destinations
+    )
+
+    # --- Create the Flow Map ---
+    # Create lookup dictionaries for station coordinates and names
+    coord_lookup = (
+        stations_df.set_index("Station_ID")[["latitude", "longitude"]]
+        .apply(tuple, axis=1)
+        .to_dict()
+    )
+    name_lookup = stations_df.set_index("Station_ID")["Station_Name"].to_dict()
+    name_to_id_lookup = {v: k for k, v in name_lookup.items()}
+
+    # Get the corresponding station IDs for the selected origin and destinations
+    origin_id = name_to_id_lookup.get(origin_name)
+    destination_ids = [name_to_id_lookup.get(name) for name in selected_destinations]
+
+    # Only create the map if a valid origin is selected
+    if origin_id:
+        # Center the map on the origin station
+        map_center = coord_lookup.get(origin_id)
+        m = folium.Map(location=map_center, zoom_start=13, tiles=tile_layer)
+
+        # Add a marker for the origin station
+        folium.Marker(
+            location=map_center,
+            popup=f"Origin: {origin_name}",
+            icon=folium.Icon(color="red", icon="star"),
+        ).add_to(m)
+        # Filter the model_df to only include flows from the selected origin to the chosen
+        # # destinations
+        filtered_flows = model_df[
+            (model_df["origin_id"] == origin_id)
+            & (model_df["destination_id"].isin(destination_ids))
+        ]
+        # Only add flow lines if there are any valid flows to display
+        if not filtered_flows.empty:
+            min_trips, max_trips = (
+                filtered_flows["avg_daily_trips"].min(),
+                filtered_flows["avg_daily_trips"].max(),
+            )
+            # Set up a continuous colormap for the flow lines based on avg_daily_trips
+            colormap = bcm.LinearColormap(
+                ["blue", "yellow", "red"],
+                vmin=min_trips,
+                vmax=max_trips if max_trips > min_trips else min_trips + 1,
+                caption="Avg. Daily Trips",
+            )
+            # Add an AntPath for each selected destination
+            for _, row in filtered_flows.iterrows():
+                origin_coords = coord_lookup.get(row["origin_id"])
+                dest_coords = coord_lookup.get(row["destination_id"])
+                dest_name = name_lookup.get(row["destination_id"])
+
+                if origin_coords and dest_coords:
+                    AntPath(
+                        locations=[origin_coords, dest_coords],
+                        color=colormap(row["avg_daily_trips"]),
+                        weight=5,
+                        delay=1000,
+                        dash_array=[10, 20],
+                        tooltip=f"To: {dest_name}<br>Predicted Daily Trips: {row['avg_daily_trips']:.2f}",
+                    ).add_to(m)
+                    folium.Marker(
+                        location=dest_coords,
+                        popup=f"Destination: {dest_name}",
+                        icon=folium.Icon(color="blue", icon="info-sign"),
+                    ).add_to(m)
+
+            m.add_child(colormap)
+
+            # Add custom CSS to style the legend and colormap for better visibility
+            style_block = """
+            <style>
+                div.branca-colormap,
+                div.branca-colorbar,
+                div.legend {
+                    background-color: rgba(255, 255, 255, 0.85) !important;  
+                    border: 2px solid #666 !important;
+                    border-radius: 8px !important;
+                    padding: 6px 10px !important;
+                    color: #000 !important;
+                    font-weight: 600 !important;
+                    box-shadow: 0 2px 6px rgba(0,0,0,0.25) !important;
+                }
+
+                div.branca-colormap .caption,
+                div.branca-colorbar .caption,
+                div.legend .caption {
+                    display: block;
+                    text-align: center;
+                    margin-bottom: 4px;
+                }
+            </style>
+            """
+            m.get_root().header.add_child(folium.Element(style_block))
+
+        components.html(m._repr_html_(), height=600)

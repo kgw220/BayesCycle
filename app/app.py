@@ -29,15 +29,17 @@ st.set_page_config(page_title="Indego Bike Demand Dashboard", layout="wide")
 idata_duration = su.load_model_data("duration_model_results")
 idata_station = su.load_model_data("station_pop_model_results")
 idata_ts = su.load_model_data("time_series")
+idata_gravity = su.load_model_data("geospatial")
 
 # Load auxiliary data files
 aux_data = su.load_auxiliary_data()
 
 # Create tabs for different models
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["Ride Duration", "Starting Station Popularity", "Daily Forecast", "Station to Station Demand"]
+    ["Ride Duration", "Starting Station Popularity", "Station to Station Demand", "Daily Forecast"]
 )
 
+# Duration Tab
 with tab1:
     st.write(
         "Use the slider to select a bike ride duration range (in minutes) and find the probability \
@@ -54,6 +56,7 @@ with tab1:
             idata=idata_duration, min_duration=min_duration_val, max_duration=max_duration_val
         )
 
+# Starting Station Popularity Tab
 with tab2:
     st.write(
         "Select a day of the week to see the predicted average number of trips starting from each \
@@ -63,8 +66,8 @@ with tab2:
     day_selection = st.selectbox(
         "Choose a day of the week:", ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     )
-    map_style = st.selectbox(
-        "Choose a map style:", ("Light", "Street Map", "Satellite"), key="map_style_select"
+    map_style_pop = st.selectbox(
+        "Choose a map style:", ("Light", "Street Map", "Satellite"), key="map_style_pop"
     )
     tile_map = {
         "Light": "CartoDB positron",
@@ -78,10 +81,27 @@ with tab2:
             stations_df=aux_data["stations_df"],
             station_ids=aux_data["station_ids"],
             day_of_week=day_selection,
-            tile_layer=tile_map[map_style],
+            tile_layer=tile_map[map_style_pop],
         )
 
+# Station to Station Demand Tab
+# NOTE: This was originally the fourth tab, but since the forecasting tab takes several seconds to
+# load, I moved this tab to be third so that it loads much quickly (instead of having to wait for
+# that tab to load first)
 with tab3:
+    map_style_flow = st.selectbox(
+        "Choose a map style:", ("Light", "Street Map", "Satellite"), key="map_style_flow"
+    )
+    if idata_gravity and idata_station and aux_data:
+        su.create_trip_flow_tab(
+            gravity_idata=idata_gravity,
+            station_idata=idata_station,
+            aux_data=aux_data,
+            tile_layer=tile_map[map_style_flow],
+        )
+
+# Time Series Forecast Tab
+with tab4:
     smoothing_sigma_val = st.slider(
         "Select Gaussian smoothing sigma:",
         min_value=0,
