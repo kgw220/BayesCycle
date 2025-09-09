@@ -23,7 +23,24 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.set_page_config(page_title="Indego Bike Demand Dashboard", layout="wide")
+st.set_page_config(page_title="BayesCycle", layout="wide")
+st.sidebar.markdown(
+    """
+    <h1 style="font-family: 'Helvetica Neue', sans-serif; color: #2E86C1; font-size: 28px;">
+        🚲 BayesCycle
+    </h1>
+    """,
+    unsafe_allow_html=True,
+)
+st.sidebar.info(
+    "This app provides a multi-faceted Bayesian analysis of Philadelphia's Indego bike-share \
+    system, allowing users to explore ride durations, station popularity, daily demand forecasts, \
+    and trip flows."
+)
+st.sidebar.warning(
+    "**Disclaimer:** The data used for this app is static and includes records up to June \
+    2025. The models and forecasts are based on this historical data."
+)
 
 # Load model .nc files
 idata_duration = su.load_model_data("duration_model_results")
