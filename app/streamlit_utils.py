@@ -13,7 +13,8 @@ import pickle
 import plotly.graph_objects as go
 import streamlit as st
 
-from scipy.stats import lognorm
+from scipy.ndimage import gaussian_filter
+from scipy.stats import nbinom, lognorm
 from streamlit_folium import st_folium
 from typing import Dict, List, Optional, Tuple
 
@@ -57,18 +58,26 @@ def load_auxiliary_data() -> Optional[Dict]:
         or None if any files are not found.
     """
     try:
-        script_dir = os.path.dirname(__file__)
-        project_root = os.path.abspath(os.path.join(script_dir, os.pardir))
+        script_dir = os.path.dirname(os.path.realpath(__file__))
 
-        # Load the DataFrame of unique station details
-        stations_df_path = os.path.join(project_root, "data", "df_stations_unique.pkl")
-        stations_df = pd.read_pickle(stations_df_path)
+        # Load the subsetted bike data pickle file (Data from past 2 years)
+        bike_data_path = os.path.join(script_dir, "..", "data", "daily_ride_counts.pkl")
+        df_daily_rides = pd.read_pickle(bike_data_path)
 
-        # Load the pickled list of station IDs that the hierarchical model was trained on
-        station_ids_path = os.path.join(project_root, "data", "station_id_list.pkl")
+        # Load the dataframe with information for each station (lat/long and name)
+        stations_df_path = os.path.join(script_dir, "..", "data", "df_stations_unique.pkl")
+        df_stations = pd.read_pickle(stations_df_path)
+
+        # Load the list of station IDs used in the hierarchical model
+        station_ids_path = os.path.join(script_dir, "..", "data", "station_id_list.pkl")
         with open(station_ids_path, "rb") as f:
             station_ids = pickle.load(f)
-        return {"stations_df": stations_df, "station_ids": station_ids}
+
+        return {
+            "stations_df": df_stations,
+            "station_ids": station_ids,
+            "daily_rides": df_daily_rides,
+        }
     except FileNotFoundError as e:
         st.error(f"Auxiliary data file not found: {e}. Please ensure all data files are in place.")
         return None
@@ -100,7 +109,7 @@ def create_duration_tab(idata: az.InferenceData, min_duration: int, max_duration
     # Display the probability as a metric
     st.metric(
         label=f"Probability of ride being between {min_duration} and {max_duration} mins",
-        value=f"{prob_in_range:.2%}",
+        value=f"{prob_in_range:.2}",
     )
 
     # Create the interactive plotly graph
@@ -259,3 +268,156 @@ def create_station_popularity_tab(
     m.get_root().header.add_child(folium.Element(style_block))
 
     st_folium(m, use_container_width=True, height=600, returned_objects=[])
+
+
+def create_forecast_tab(
+    idata: az.InferenceData, daily_rides: pd.Series, smoothing_sigma: int
+) -> None:
+    """
+    Creates the Streamlit tab for visualizing the daily demand forecast.
+
+    Parameters
+    ----------
+    idata : az.InferenceData
+        The fitted InferenceData object for the time-series model
+    daily_rides : pd.Series
+        The historical time series of daily ride counts
+    smoothing_sigma : int
+        The sigma value for the Gaussian smoothing filter. If 0, no smoothing is applied
+    """
+    st.write(
+        "This chart shows the historical data broken down into the learned long-term trend and the \
+        overall model fit (trend + weekly pattern)."
+    )
+
+    # Extract the posterior mean for the trend and the full model fit
+    posterior_samples = az.extract(idata)
+    mean_log_trend = posterior_samples["trend"].mean(dim="sample").values
+    day_of_week_hist = daily_rides.index.dayofweek.values
+    mean_fit = np.exp(
+        mean_log_trend
+        + posterior_samples["week_effect"].mean(dim="sample").values[day_of_week_hist]
+    )
+    mean_trend_original_scale = np.exp(mean_log_trend)
+
+    # Apply Gaussian smoothing if specified
+    if smoothing_sigma > 0:
+        smoothed_trend = gaussian_filter(mean_trend_original_scale, sigma=smoothing_sigma)
+        smoothed_fit = gaussian_filter(mean_fit, sigma=smoothing_sigma)
+    else:
+        smoothed_trend = mean_trend_original_scale
+        smoothed_fit = mean_fit
+
+    # Create the Decomposition Plot
+    fig_fit = go.Figure()
+    fig_fit.add_trace(
+        go.Scatter(
+            x=daily_rides.index,
+            y=daily_rides.values,
+            mode="markers",
+            name="Observed Rides",
+            marker=dict(color="gray", opacity=0.5),
+        )
+    )
+    fig_fit.add_trace(
+        go.Scatter(
+            x=daily_rides.index,
+            y=smoothed_trend,
+            mode="lines",
+            name="Estimated Trend (baseline)",
+            line=dict(color="blue"),
+            opacity=0.7,
+        )
+    )
+    fig_fit.add_trace(
+        go.Scatter(
+            x=daily_rides.index,
+            y=smoothed_fit,
+            mode="lines",
+            name="Mean Model Fit (with weekly seasonality)",
+            line=dict(color="orange"),
+            opacity=0.3,
+        )
+    )
+    fig_fit.update_layout(
+        title="Bike Demand Model",
+        xaxis_title="Date",
+        yaxis_title="Number of Rides",
+        xaxis=dict(
+            dtick="M1",
+            tickformat="%Y-%b",
+        ),
+    )
+    st.plotly_chart(fig_fit, use_container_width=True)
+
+    st.subheader("90-Day Forecast since June 2025")
+
+    # Manually simulate the forecast
+    last_day_trend = posterior_samples["trend"].isel(trend_dim_0=-1)
+    week_effect_samples = posterior_samples["week_effect"]
+    alpha_samples = posterior_samples["alpha"]
+    trend_sigma = 0.05
+    n_samples = len(last_day_trend)
+    n_forecast_days = 90
+    forecast_dates = pd.date_range(
+        start=daily_rides.index[-1] + pd.Timedelta(days=1), periods=n_forecast_days
+    )
+    forecast_day_of_week = forecast_dates.dayofweek
+
+    # Initialize array to store N complete forecast paths
+    forecast_values = np.zeros((n_samples, n_forecast_days))
+
+    # Loop through each posterior sample to create a full distribution of forecasts
+    for i in range(n_samples):
+        current_trend = last_day_trend.isel(sample=i).values
+        current_week_effect_sample = week_effect_samples.isel(sample=i).values
+        current_alpha_sample = alpha_samples.isel(sample=i).values
+        for t in range(n_forecast_days):
+            # Apply a random walk step to the trend
+            current_trend += np.random.normal(0, trend_sigma)
+            day_effect = current_week_effect_sample[forecast_day_of_week[t]]
+            # Calculate the expected mean (lambda/mu) on the original scale
+            expected_count = np.exp(current_trend + day_effect)
+            # NOTE: The nbinom.rvs function needs p, not mu and alpha. Convert to p with mu and alpha
+            # Negative Binomial parameter conversion: p = mu / (mu + alpha)
+            p = expected_count / (expected_count + current_alpha_sample)
+            # Sample the final count using the Negative Binomial distribution
+            forecast_values[i, t] = nbinom.rvs(n=current_alpha_sample, p=1 - p)
+
+    # Apply gaussian smoothing if specified
+    mean_forecast = forecast_values.mean(axis=0)
+    if smoothing_sigma > 0:
+        smoothed_forecast = gaussian_filter(mean_forecast, sigma=smoothing_sigma)
+        smoothed_observed = gaussian_filter(daily_rides.values, sigma=smoothing_sigma)
+    else:
+        smoothed_forecast = mean_forecast
+        smoothed_observed = daily_rides.values
+
+    # Create the Forecast Plot
+    fig_fc = go.Figure()
+    fig_fc.add_trace(
+        go.Scatter(
+            x=daily_rides.index,
+            y=smoothed_observed,
+            mode="lines",
+            name="Observed Rides",
+            line=dict(color="gray"),
+        )
+    )
+    fig_fc.add_trace(
+        go.Scatter(
+            x=forecast_dates,
+            y=smoothed_forecast,
+            mode="lines",
+            name="Mean Forecast",
+            line=dict(color="red"),
+        )
+    )
+
+    fig_fc.update_layout(
+        title="Daily Bike Ride Demand Forecast",
+        xaxis_title="Date",
+        yaxis_title="Number of Rides",
+        xaxis=dict(dtick="M1", tickformat="%Y-%b"),
+    )
+    st.plotly_chart(fig_fc, use_container_width=True)

@@ -28,6 +28,8 @@ st.set_page_config(page_title="Indego Bike Demand Dashboard", layout="wide")
 # Load model .nc files
 idata_duration = su.load_model_data("duration_model_results")
 idata_station = su.load_model_data("station_pop_model_results")
+idata_ts = su.load_model_data("time_series")
+
 # Load auxiliary data files
 aux_data = su.load_auxiliary_data()
 
@@ -48,7 +50,9 @@ with tab1:
     )
 
     if idata_duration:
-        su.create_duration_tab(idata_duration, min_duration_val, max_duration_val)
+        su.create_duration_tab(
+            idata=idata_duration, min_duration=min_duration_val, max_duration=max_duration_val
+        )
 
 with tab2:
     st.write(
@@ -70,9 +74,24 @@ with tab2:
 
     if idata_station and aux_data:
         su.create_station_popularity_tab(
-            idata_station,
-            aux_data["stations_df"],
-            aux_data["station_ids"],
-            day_selection,
-            tile_map[map_style],
+            idata=idata_station,
+            stations_df=aux_data["stations_df"],
+            station_ids=aux_data["station_ids"],
+            day_of_week=day_selection,
+            tile_layer=tile_map[map_style],
+        )
+
+with tab3:
+    smoothing_sigma_val = st.slider(
+        "Select Gaussian smoothing sigma:",
+        min_value=0,
+        max_value=10,
+        value=5,
+        step=1,
+        help="Controls the amount of smoothing applied to the trend and forecast lines in the \
+             'Daily Forecast' tab. 0 means no smoothing.",
+    )
+    if idata_ts and aux_data:
+        su.create_forecast_tab(
+            idata=idata_ts, daily_rides=aux_data["daily_rides"], smoothing_sigma=smoothing_sigma_val
         )
