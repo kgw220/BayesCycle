@@ -360,7 +360,9 @@ def create_forecast_tab(
             dtick="M1",
             tickformat="%Y-%b",
             tickangle=-45,
+            tickmode="linear",
         ),
+        margin=dict(b=100),
     )
     st.plotly_chart(fig_fit, use_container_width=True)
 
@@ -442,7 +444,9 @@ def create_forecast_tab(
             dtick="M1",
             tickformat="%Y-%b",
             tickangle=-45,
+            tickmode="linear",
         ),
+        margin=dict(b=100),
     )
     st.plotly_chart(fig_fc, use_container_width=True)
 
