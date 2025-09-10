@@ -1,4 +1,5 @@
 # BayesCycle
+<img width="2459" height="976" alt="Screenshot_307" src="https://github.com/user-attachments/assets/4a5c1319-88a0-49b4-bad0-5e06c4d026d7" />
 
 ## Background
 This project provides a (relatively) comprehensive Bayesian analysis of Philadelphia's Indego bike-share system as a whole. Using publicly available trip data, I fitted a series of probabilistic models to understand and forecast system dynamics, from individual ride characteristics to the overall network flow. The visualizations are designed to help city planners, transportation analysts, or curious citizens explore patterns in ridership and quantify the uncertainty inherent in demand forecasting.
