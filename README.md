@@ -7,7 +7,7 @@ This project provides a (relatively) comprehensive Bayesian analysis of Philadel
 The data is sourced from the official Indego Open Data portal, which provides quarterly trip records for the entire system.
 
 ## Goal
-The primary goal is to provide a comprehensive, interactive tool for understanding and forecasting bike-share demand in Philadelphia with different factors usingBayesian statistical modeling to move beyond simple averages, providing a full probabilistic view of the system's behavior. This allows for a deeper understanding of the factors influencing ridership and provides a more honest assessment of forecast uncertainty.
+The primary goal is to provide a comprehensive, interactive tool for understanding and forecasting bike-share demand in Philadelphia with different factors using Bayesian statistical modeling to move beyond simple averages, providing a full probabilistic view of the system's behavior. This allows for a deeper understanding of the factors influencing ridership and provides a more honest assessment of forecast uncertainty.
 
 ## Methodology
 This project is built on a series of four interconnected Bayesian models, each designed to analyze a different aspect of the bike-share system. 
